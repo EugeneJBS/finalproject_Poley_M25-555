@@ -97,8 +97,9 @@ make build
 ```
 
 ## Запись консоли (asciinema)
-
-
+```bash
+https://asciinema.org/a/cObWNjBIHtcfUC6o
+```
 ## Автор
 ФИО: Полей Евгений
 
