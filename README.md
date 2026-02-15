@@ -80,9 +80,9 @@ make build
 ```
 
 ## Запись консоли (asciinema)
-Демонстрация работы старой версии
+Демонстрация работы новой версии
 ```bash
-https://asciinema.org/a/cObWNjBIHtcfUC6o
+https://asciinema.org/a/V0ty2JOGF3nvhqqY
 ```
 ## Автор
 ### Полей Евгений
