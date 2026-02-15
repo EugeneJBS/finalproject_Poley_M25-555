@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Консольный валютный кошелёк ValutaTrade Hub"
 authors = ["Poley Evgeny"]
 readme = "README.md"
-packages = [{ include = "valutatrade_hub" }]
+packages = [{include = "valutatrade_hub"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
