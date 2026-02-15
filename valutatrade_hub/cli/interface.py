@@ -21,7 +21,7 @@ from ..core.usecases import (
 from ..parser_service.api_clients import CoinGeckoClient, ExchangeRateApiClient
 from ..parser_service.config import ParserConfig
 from ..parser_service.updater import RatesUpdater
-
+from ..parser_service.scheduler import run_scheduler
 
 def _parse_options(tokens: List[str]) -> Dict[str, str]:
     opts: Dict[str, str] = {}
@@ -49,6 +49,7 @@ def _print_help() -> None:
     print("  sell --currency CODE --amount N")
     print("  get-rate --from CODE --to CODE")
     print("  update-rates [--source coingecko|exchangerate]")
+    print("  run-scheduler [--interval SECONDS]")
     print("  show-rates [--currency CODE] [--top N]")
     print("  whoami")
     print("  logout")
@@ -182,6 +183,22 @@ def _cmd_update_rates(args: List[str]) -> None:
     print(f"Total rates updated: {total}")
 
 
+def _cmd_run_scheduler(args: List[str]) -> None:
+    opts = _parse_options(args)
+    interval = 300
+    if "interval" in opts:
+        try:
+            interval = int(opts["interval"])
+        except ValueError:
+            print("Ошибка: interval должен быть целым числом")
+            return
+    try:
+        run_scheduler(interval=interval)
+    except KeyboardInterrupt:
+        # Перехватываем здесь, чтобы не крашить весь CLI при выходе из функции
+        print("\nПланировщик остановлен.")
+
+
 def _cmd_show_rates(args: List[str]) -> None:
     opts = _parse_options(args)
     currency = opts.get("currency")
@@ -248,6 +265,8 @@ def run_cli() -> None:
             _cmd_get_rate(args)
         elif cmd == "update-rates":
             _cmd_update_rates(args)
+        elif cmd == "run-scheduler":
+            _cmd_run_scheduler(args)
         elif cmd == "show-rates":
             _cmd_show_rates(args)
         elif cmd == "whoami":
