@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 class SettingsLoader:
-    _instance: "SettingsLoader | None" = None
+    _instance: Optional["SettingsLoader"] = None
+    _settings: dict[str, Any] = {}
 
     def __new__(cls) -> "SettingsLoader":
         if cls._instance is None:
@@ -15,11 +16,15 @@ class SettingsLoader:
         return cls._instance
 
     def _init_defaults(self) -> None:
+        # Определяем корневую директорию проекта
+        # Если запускаем из корня, то data будет в ./data
         base_dir = Path(os.getenv("VALUTA_BASE_DIR", ".")).resolve()
         data_dir = base_dir / "data"
-        data_dir.mkdir(exist_ok=True)
+        data_dir.mkdir(exist_ok=True, parents=True)
 
-        self._settings: dict[str, Any] = {
+        logs_dir = base_dir / "logs"
+
+        self._settings = {
             "DATA_DIR": str(data_dir),
             "USERS_FILE": str(data_dir / "users.json"),
             "PORTFOLIOS_FILE": str(data_dir / "portfolios.json"),
@@ -29,7 +34,7 @@ class SettingsLoader:
             ),
             "RATES_TTL_SECONDS": 300,
             "DEFAULT_BASE_CURRENCY": "USD",
-            "LOG_DIR": str(base_dir / "logs"),
+            "LOG_DIR": str(logs_dir),
         }
 
     def get(self, key: str, default: Any | None = None) -> Any:

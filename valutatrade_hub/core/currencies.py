@@ -1,23 +1,18 @@
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Dict
 
-from .exceptions import CurrencyNotFoundError
+from valutatrade_hub.core.exceptions import CurrencyNotFoundError
 
 
 class Currency(ABC):
-
-    name: str
-    code: str
-
     def __init__(self, name: str, code: str) -> None:
+        # Валидация общая для всех валют
         code_upper = code.upper()
         if not (2 <= len(code_upper) <= 5) or " " in code_upper:
-            raise ValueError("Некорректный код валюты")
+            raise ValueError(f"Некорректный код валюты: {code}")
         if not name:
             raise ValueError("Имя валюты не может быть пустым")
+
         self.name = name
         self.code = code_upper
 
@@ -26,11 +21,8 @@ class Currency(ABC):
         raise NotImplementedError
 
 
-@dataclass
 class FiatCurrency(Currency):
-    issuing_country: str = "Unknown"
-
-    def __init__(self, name: str, code: str, issuing_country: str) -> None:
+    def __init__(self, name: str, code: str, issuing_country: str = "Unknown") -> None:
         super().__init__(name=name, code=code)
         self.issuing_country = issuing_country
 
@@ -41,17 +33,13 @@ class FiatCurrency(Currency):
         )
 
 
-@dataclass
 class CryptoCurrency(Currency):
-    algorithm: str = "Unknown"
-    market_cap: float = 0.0
-
     def __init__(
-        self,
-        name: str,
-        code: str,
-        algorithm: str,
-        market_cap: float,
+            self,
+            name: str,
+            code: str,
+            algorithm: str = "Unknown",
+            market_cap: float = 0.0,
     ) -> None:
         super().__init__(name=name, code=code)
         self.algorithm = algorithm
@@ -63,6 +51,8 @@ class CryptoCurrency(Currency):
             f"(Algo: {self.algorithm}, MCAP: {self.market_cap:.2e})"
         )
 
+
+# Реестр валют
 _CURRENCY_REGISTRY: Dict[str, Currency] = {
     "USD": FiatCurrency("US Dollar", "USD", "United States"),
     "EUR": FiatCurrency("Euro", "EUR", "Eurozone"),
