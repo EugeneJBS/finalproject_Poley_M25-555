@@ -26,13 +26,16 @@ finalproject_<фамилия>_<группа>/
 
 ## Установка
 
+Для работы требуется Python 3.11+ и Poetry
+
 1.  **Установить зависимости:**
     ```bash
     make install
     ```
 
 2.  **Указать API-ключ для ExchangeRate-API:**
-    Для работы парсера курсов валют необходимо установить переменную окружения:
+
+    Настройте переменные окружения:
     ```bash
     export EXCHANGERATE_API_KEY="ваш_ключ"
     ```
@@ -46,43 +49,23 @@ make project
 
 ## Основные команды
 
-### Управление аккаунтом
-* **Регистрация:**
-    ```bash
-    register --username alice --password 1234
-    ```
-* **Вход:**
-    ```bash
-    login --username alice --password 1234
-    ```
+### Внутри приложения доступны следующие команды:
 
-### Торговля и портфель
-* **Показать портфель:**
-    ```bash
-    show-portfolio
-    ```
-* **Покупка:**
-    ```bash
-    buy --currency BTC --amount 0.05
-    ```
-* **Продажа:**
-    ```bash
-    sell --currency BTC --amount 0.01
-    ```
+- ```register --username <name> --password <pass>``` — Регистрация нового пользователя.
 
-### Курсы валют
-* **Получить конкретный курс:**
-    ```bash
-    get-rate --from USD --to BTC
-    ```
-* **Обновить курсы (Parser Service):**
-    ```bash
-    update-rates
-    ```
-* **Показать список всех курсов:**
-    ```bash
-    show-rates
-    ```
+- ```login --username <name> --password <pass>``` — Вход в систему.
+
+- ```update-rates``` — Загрузка актуальных курсов валют из интернета.
+
+- ```buy --currency <CODE> --amount <N>``` — Покупка валюты (например, BTC).
+
+- ```sell --currency <CODE> --amount <N>``` — Продажа валюты.
+
+- ```show-portfolio``` — Просмотр балансов и общей стоимости.
+
+- ```show-rates``` — Просмотр текущих курсов.
+
+- ```help``` — Список всех команд.
 
 ## Линтер и сборка
 
@@ -97,10 +80,11 @@ make build
 ```
 
 ## Запись консоли (asciinema)
+Демонстрация работы старой версии
 ```bash
 https://asciinema.org/a/cObWNjBIHtcfUC6o
 ```
 ## Автор
-ФИО: Полей Евгений
+### Полей Евгений
 
-Группа: M25-555
+### Группа: M25-555
