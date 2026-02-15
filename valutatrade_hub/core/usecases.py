@@ -6,15 +6,15 @@ from typing import Optional
 from prettytable import PrettyTable
 
 from ..decorators import log_action
-from ..infra.database import get_db
-from ..infra.settings import get_settings
+from ..infra.database import DatabaseManager
+from ..infra.settings import SettingsLoader
 from .exceptions import (
     ApiRequestError,
     CurrencyNotFoundError,
     InsufficientFundsError,
 )
 from .models import User, Portfolio
-from .utils import validate_currency_code
+from ..core.currencies import get_currency
 
 _current_username: Optional[str] = None
 
@@ -28,47 +28,46 @@ def set_current_username(username: Optional[str]) -> None:
     _current_username = username
 
 
-def _find_user_by_name(users: list[User], username: str) -> Optional[User]:
-    for u in users:
-        if u.username == username:
-            return u
-    return None
+def _get_db() -> DatabaseManager:
+    return DatabaseManager()
 
 
-def _find_portfolio_by_user_id(
-    portfolios: list[Portfolio],
-    user_id: int,
-) -> Optional[Portfolio]:
-    for p in portfolios:
-        if p.user_id == user_id:
-            return p
-    return None
+def _require_login() -> User:
+    username = get_current_username()
+    if not username:
+        raise PermissionError("Сначала выполните login")
+
+    db = _get_db()
+    user = db.get_user_by_username(username)
+    if not user:
+        set_current_username(None)
+        raise PermissionError("Пользователь не найден, выполните login заново")
+    return user
 
 
 @log_action("REGISTER")
 def register_user(username: str, password: str) -> str:
-    db = get_db()
-    users = db.load_users()
+    db = _get_db()
 
-    if _find_user_by_name(users, username):
+    if db.get_user_by_username(username):
         return f"Имя пользователя '{username}' уже занято"
 
-    try:
-        new_id = max((u.user_id for u in users), default=0) + 1
-    except ValueError:
-        new_id = 1
+    # Генерация ID
+    users = db.load_users()
+    new_id = max((u.user_id for u in users), default=0) + 1
 
     try:
-        user = User.create(user_id=new_id, username=username, password=password)
+        # Создание пользователя (пароль хешируется внутри __init__)
+        user = User(user_id=new_id, username=username, password=password)
     except ValueError as exc:
         return str(exc)
 
-    users.append(user)
-    db.save_users(users)
+    # Сохранение пользователя
+    db.save_user(user)
 
-    portfolios = db.load_portfolios()
-    portfolios.append(Portfolio(_user_id=user.user_id, _wallets={}))
-    db.save_portfolios(portfolios)
+    # Создание пустого портфеля
+    portfolio = Portfolio(user_id=user.user_id)
+    db.save_portfolio(portfolio)
 
     return (
         f"Пользователь '{username}' зарегистрирован (id={user.user_id}). "
@@ -78,9 +77,9 @@ def register_user(username: str, password: str) -> str:
 
 @log_action("LOGIN")
 def login_user(username: str, password: str) -> str:
-    db = get_db()
-    users = db.load_users()
-    user = _find_user_by_name(users, username)
+    db = _get_db()
+    user = db.get_user_by_username(username)
+
     if not user:
         return f"Пользователь '{username}' не найден"
 
@@ -91,83 +90,70 @@ def login_user(username: str, password: str) -> str:
     return f"Вы вошли как '{username}'"
 
 
-def _require_login() -> User:
-    username = get_current_username()
-    if not username:
-        raise PermissionError("Сначала выполните login")
-
-    db = get_db()
-    users = db.load_users()
-    user = _find_user_by_name(users, username)
-    if not user:
-        raise PermissionError("Сначала выполните login")
-    return user
-
-
 def show_portfolio(base_currency: str = "USD") -> str:
     user = _require_login()
-    db = get_db()
-    portfolios = db.load_portfolios()
-    portfolio = _find_portfolio_by_user_id(portfolios, user.user_id)
+    db = _get_db()
+
+    portfolio = db.get_portfolio_by_user_id(user.user_id)
     if not portfolio:
         return "Портфель не найден"
 
-    snapshot = db.load_rates_snapshot()
+    # Получаем словарь курсов
+    rates_data = db.get_rates_snapshot().get("pairs", {})
     base = base_currency.upper()
-
-    pairs = snapshot.get("pairs", {})
-    if base == "USD":
-        rates_data = pairs
-    else:
-        rates_data = pairs
 
     if not portfolio.wallets:
         return "У вас пока нет ни одного кошелька"
 
     table = PrettyTable()
     table.field_names = ["Валюта", "Баланс", f"Стоимость в {base}"]
+    table.align = "l"
 
-    total = 0.0
+    total = portfolio.get_total_value(rates_data, base)
+
+    # Формирование строк таблицы
     for code, wallet in portfolio.wallets.items():
+        # Расчет стоимости конкретного кошелька для отображения
+        val_in_base = 0.0
         if code == base:
-            value_in_base = wallet.balance
+            val_in_base = wallet.balance
         else:
             pair = f"{code}_{base}"
             info = rates_data.get(pair)
-            if not info:
-                value_in_base = 0.0
-            else:
-                value_in_base = wallet.balance * float(info["rate"])
-        total += value_in_base
-        table.add_row(
-            [code, f"{wallet.balance:.4f}", f"{value_in_base:.2f} {base}"]
-        )
+            if info:
+                rate = float(info["rate"])
+                val_in_base = wallet.balance * rate
 
-    header = (
-        f"Портфель пользователя '{user.username}' "
-        f"(база: {base}):\n"
-    )
+        table.add_row([
+            code,
+            f"{wallet.balance:.4f}",
+            f"{val_in_base:.2f} {base}"
+        ])
+
+    header = f"Портфель пользователя '{user.username}' (база: {base}):\n"
     footer = f"ИТОГО: {total:,.2f} {base}"
-    return header + str(table) + "\n" + footer
+    return header + str(table) + "\n---------------------------------\n" + footer
 
 
 @log_action("BUY", verbose=True)
 def buy_currency(currency_code: str, amount: float) -> str:
+    # Валидация
     if amount <= 0:
         return "'amount' должен быть положительным числом"
-    try:
-        code = validate_currency_code(currency_code)
-    except CurrencyNotFoundError as exc:
-        return str(exc)
+
+    # Провеяем существует ли валюта
+    currency = get_currency(currency_code)
+    code = currency.code
 
     user = _require_login()
-    db = get_db()
-    portfolios = db.load_portfolios()
-    portfolio = _find_portfolio_by_user_id(portfolios, user.user_id)
-    if not portfolio:
-        portfolio = Portfolio(_user_id=user.user_id, _wallets={})
-        portfolios.append(portfolio)
+    db = _get_db()
 
+    # Получение портфеля
+    portfolio = db.get_portfolio_by_user_id(user.user_id)
+    if not portfolio:
+        portfolio = Portfolio(user_id=user.user_id)
+
+    # Пополнение
     wallet = portfolio.get_wallet(code)
     if not wallet:
         wallet = portfolio.add_currency(code)
@@ -176,196 +162,163 @@ def buy_currency(currency_code: str, amount: float) -> str:
     wallet.deposit(amount)
     after = wallet.balance
 
-    snapshot = db.load_rates_snapshot()
-    pairs = snapshot.get("pairs", {})
+    # Сохраняем изменения
+    db.save_portfolio(portfolio)
+
+    # Оценочная стоимость
+    rates_data = db.get_rates_snapshot().get("pairs", {})
     pair = f"{code}_USD"
-    info = pairs.get(pair)
+    info = rates_data.get(pair)
+
+    est_msg = ""
     if info:
         rate = float(info["rate"])
         estimated = amount * rate
-        est_msg = f"Оценочная стоимость покупки: {estimated:,.2f} USD"
-        rate_msg = (
-            f"по курсу {rate:.2f} USD/{code}"
-            if rate > 0
-            else "по неизвестному курсу"
-        )
-    else:
-        rate_msg = "по неизвестному курсу"
-        est_msg = "Оценочную стоимость рассчитать не удалось"
-
-    db.save_portfolios(portfolios)
+        est_msg = f"\nОценочная стоимость покупки: {estimated:,.2f} USD"
 
     return (
-        f"Покупка выполнена: {amount:.4f} {code} {rate_msg}\n"
+        f"Покупка выполнена: {amount:.4f} {code}\n"
         f"Изменения в портфеле:\n"
-        f"- {code}: было {before:.4f} → стало {after:.4f}\n"
+        f"- {code}: было {before:.4f} → стало {after:.4f}"
         f"{est_msg}"
     )
 
 
 @log_action("SELL", verbose=True)
 def sell_currency(currency_code: str, amount: float) -> str:
+    # Валидация
     if amount <= 0:
         return "'amount' должен быть положительным числом"
-    try:
-        code = validate_currency_code(currency_code)
-    except CurrencyNotFoundError as exc:
-        return str(exc)
+
+    currency = get_currency(currency_code)
+    code = currency.code
 
     user = _require_login()
-    db = get_db()
-    portfolios = db.load_portfolios()
-    portfolio = _find_portfolio_by_user_id(portfolios, user.user_id)
+    db = _get_db()
+
+    portfolio = db.get_portfolio_by_user_id(user.user_id)
     if not portfolio:
-        return (
-            f"У вас нет кошелька '{code}'. Добавьте валюту: "
-            "она создаётся автоматически при первой покупке."
-        )
+        return f"У вас нет кошелька '{code}'."
 
     wallet = portfolio.get_wallet(code)
     if not wallet:
-        return (
-            f"У вас нет кошелька '{code}'. Добавьте валюту: "
-            "она создаётся автоматически при первой покупке."
-        )
+        return f"У вас нет кошелька '{code}'. Сначала купите валюту."
 
     before = wallet.balance
-    try:
-        wallet.withdraw(amount)
-    except InsufficientFundsError as exc:
-        return str(exc)
+
+    # Снятие
+    wallet.withdraw(amount)
     after = wallet.balance
 
-    snapshot = db.load_rates_snapshot()
-    pairs = snapshot.get("pairs", {})
+    db.save_portfolio(portfolio)
+
+    # Оценочная выручка
+    rates_data = db.get_rates_snapshot().get("pairs", {})
     pair = f"{code}_USD"
-    info = pairs.get(pair)
+    info = rates_data.get(pair)
+
+    est_msg = ""
     if info:
         rate = float(info["rate"])
         revenue = amount * rate
-        msg = (
-            f"Продажа выполнена: {amount:.4f} {code} "
-            f"по курсу {rate:.2f} USD/{code}\n"
-            f"Изменения в портфеле:\n"
-            f"- {code}: было {before:.4f} → стало {after:.4f}\n"
-            f"Оценочная выручка: {revenue:,.2f} USD"
-        )
-    else:
-        msg = (
-            f"Продажа выполнена: {amount:.4f} {code}\n"
-            f"Изменения в портфеле:\n"
-            f"- {code}: было {before:.4f} → стало {after:.4f}\n"
-            "Курс не найден, оценочную выручку рассчитать не удалось"
-        )
+        est_msg = f"\nОценочная выручка: {revenue:,.2f} USD"
 
-    db.save_portfolios(portfolios)
-    return msg
+    return (
+        f"Продажа выполнена: {amount:.4f} {code}\n"
+        f"Изменения в портфеле:\n"
+        f"- {code}: было {before:.4f} → стало {after:.4f}"
+        f"{est_msg}"
+    )
 
 
 def get_rate(from_code: str, to_code: str) -> str:
-    settings = get_settings()
-    ttl_seconds = int(settings.get("RATES_TTL_SECONDS", 300))
-    base = validate_currency_code(from_code)
-    quote = validate_currency_code(to_code)
+    # Валидация кодов через get_currency
+    base_curr = get_currency(from_code)
+    quote_curr = get_currency(to_code)
+    base = base_curr.code
+    quote = quote_curr.code
 
-    db = get_db()
-    snapshot = db.load_rates_snapshot()
+    # Загрузка настроек для проверки TTL
+    settings = SettingsLoader()
+    ttl = int(settings.get("RATES_TTL_SECONDS", 300))
+
+    db = _get_db()
+    snapshot = db.get_rates_snapshot()
     pairs = snapshot.get("pairs", {})
     last_refresh_raw = snapshot.get("last_refresh")
 
+    # Проверка актуальности кэша
+    is_outdated = False
     if last_refresh_raw:
         last_refresh = datetime.fromisoformat(last_refresh_raw)
-        if datetime.now(timezone.utc) - last_refresh > timedelta(
-            seconds=ttl_seconds
-        ):
-            raise ApiRequestError(
-                "Локальный кеш курсов устарел. "
-                "Выполните 'update-rates' и попробуйте снова.",
-            )
+        if datetime.now(timezone.utc) - last_refresh > timedelta(seconds=ttl):
+            is_outdated = True
     else:
-        raise ApiRequestError(
-            "Кеш курсов пуст. Выполните 'update-rates' и попробуйте снова."
-        )
+        is_outdated = True
 
     pair = f"{base}_{quote}"
-    rev_pair = f"{quote}_{base}"
     info = pairs.get(pair)
-    rev_info = pairs.get(rev_pair)
 
-    if not info and not rev_info:
-        raise CurrencyNotFoundError(code=pair)
+    warning = " (Данные устарели, пожалуйста, выполните update-rates)" if is_outdated else ""
 
     if info:
         rate = float(info["rate"])
-        ts = info["updated_at"]
-        msg = (
-            f"Курс {base}→{quote}: {rate:.8f} "
-            f"(обновлено: {ts})"
+        updated = info.get("updated_at", "N/A")
+        return (
+            f"Курс {base}→{quote}: {rate:.8f} (обновлено: {updated}){warning}\n"
+            f"Обратный курс {quote}→{base}: {(1 / rate):.8f}"
         )
-        if rev_info:
-            rev_rate = float(rev_info["rate"])
-        else:
-            rev_rate = 1.0 / rate if rate != 0 else 0.0
-        msg += (
-            f"\nОбратный курс {quote}→{base}: "
-            f"{rev_rate:.5f}"
-        )
-        return msg
 
+    # Обратный курс
+    rev_pair = f"{quote}_{base}"
+    rev_info = pairs.get(rev_pair)
     if rev_info:
         rev_rate = float(rev_info["rate"])
-        ts = rev_info["updated_at"]
-        rate = 1.0 / rev_rate if rev_rate != 0 else 0.0
+        rate = 1 / rev_rate if rev_rate else 0.0
+        updated = rev_info.get("updated_at", "N/A")
         return (
-            f"Курс {base}→{quote}: {rate:.8f} "
-            f"(обновлено: {ts})\n"
-            f"Обратный курс {quote}→{base}: {rev_rate:.5f}"
+            f"Курс {base}→{quote}: {rate:.8f} (вычислено через обратный, обновлено: {updated}){warning}"
         )
 
-    raise CurrencyNotFoundError(code=pair)
+    raise CurrencyNotFoundError(f"Пара {base}/{quote}")
 
 
-def show_rates(
-    currency: str | None = None,
-    top: int | None = None,
-) -> str:
-    db = get_db()
-    snapshot = db.load_rates_snapshot()
+def show_rates(currency: str | None = None, top: int | None = None) -> str:
+    db = _get_db()
+    snapshot = db.get_rates_snapshot()
     pairs = snapshot.get("pairs", {})
-    last_refresh = snapshot.get("last_refresh")
+    last_refresh = snapshot.get("last_refresh", "Never")
 
     if not pairs:
-        return (
-            "Локальный кеш курсов пуст. "
-            "Выполните 'update-rates', чтобы загрузить данные."
-        )
+        return "Локальный кеш курсов пуст. Выполните 'update-rates'."
 
-    filtered = []
-    if currency:
-        code = currency.upper()
-        for pair, info in pairs.items():
-            if pair.startswith(f"{code}_"):
-                filtered.append((pair, info))
-        if not filtered:
-            return f"Курс для '{code}' не найден в кеше."
-    else:
-        filtered = list(pairs.items())
+    # Фильтрация и сортировка
+    items = []
+    for pair, data in pairs.items():
+        if currency:
+            target = currency.upper()
+            if target not in pair:
+                continue
+        items.append((pair, data))
 
-    filtered.sort(key=lambda x: float(x[1]["rate"]), reverse=True)
-    if top is not None and top > 0:
-        filtered = filtered[:top]
+    items.sort(key=lambda x: float(x[1].get('rate', 0)), reverse=True)
+
+    if top:
+        items = items[:top]
+
+    if not items:
+        return "Курсы не найдены по заданным критериям."
 
     table = PrettyTable()
     table.field_names = ["Пара", "Курс", "Обновлено", "Источник"]
-    for pair, info in filtered:
-        table.add_row(
-            [
-                pair,
-                f"{float(info['rate']):.6f}",
-                info.get("updated_at", "-"),
-                info.get("source", "-"),
-            ]
-        )
+    table.align = "l"
 
-    header = f"Rates from cache (updated at {last_refresh}):\n"
-    return header + str(table)
+    for pair, data in items:
+        table.add_row([
+            pair,
+            f"{float(data.get('rate', 0)):.6f}",
+            data.get('updated_at', '-'),
+            data.get('source', '-')
+        ])
+
+    return f"Rates from cache (updated at {last_refresh}):\n" + str(table)
